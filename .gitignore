@@ -47,3 +47,10 @@ profile.cov
 /dashboard/assets/package-lock.json
 
 **/yarn-error.log
+
+block.json
+chain_data/*
+cmd/abigen/abigen
+d0/
+genesis.json
+start.sh

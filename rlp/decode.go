@@ -29,6 +29,7 @@ import (
 	"sync"
 )
 
+//解码器，把RLP数据解码为go的数据结构
 //lint:ignore ST1012 EOL is not an error.
 
 // EOL is returned when the end of the current list
