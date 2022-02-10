@@ -131,6 +131,7 @@ func NewCustom(file string, namespace string, customize func(options *opt.Option
 		log:      logger,
 		quitChan: make(chan chan error),
 	}
+	// 初始化metrics的各种参数
 	ldb.compTimeMeter = metrics.NewRegisteredMeter(namespace+"compact/time", nil)
 	ldb.compReadMeter = metrics.NewRegisteredMeter(namespace+"compact/input", nil)
 	ldb.compWriteMeter = metrics.NewRegisteredMeter(namespace+"compact/output", nil)
@@ -243,6 +244,7 @@ func (db *Database) Path() string {
 
 // meter periodically retrieves internal leveldb counters and reports them to
 // the metrics subsystem.
+// 下面的注释就是我们调用 db.db.GetProperty("leveldb.stats")返回的字符串，后续的代码需要解析这个字符串并把信息写入到Meter中。
 //
 // This is how a LevelDB stats table looks like (currently):
 //   Compactions
@@ -282,8 +284,10 @@ func (db *Database) meter(refresh time.Duration) {
 	defer timer.Stop()
 
 	// Iterate ad infinitum and collect the stats
+	// 无限循环的去记录stats，除非db.quitChan获得关闭信号
 	for i := 1; errc == nil && merr == nil; i++ {
 		// Retrieve the database stats
+		// 调用LevelDB本身的接口来获得新信息
 		stats, err := db.db.GetProperty("leveldb.stats")
 		if err != nil {
 			db.log.Error("Failed to read database stats", "err", err)
@@ -335,6 +339,10 @@ func (db *Database) meter(refresh time.Duration) {
 			db.compWriteMeter.Mark(int64((compactions[i%2][3] - compactions[(i-1)%2][3]) * 1024 * 1024))
 		}
 		// Retrieve the write delay statistic
+		// 之后都是对获取的信息进行处理
+
+		// Retrieve the write delay statistic
+		// 获取写操作的延迟信息
 		writedelay, err := db.db.GetProperty("leveldb.writedelay")
 		if err != nil {
 			db.log.Error("Failed to read database write delay statistic", "err", err)
@@ -373,7 +381,10 @@ func (db *Database) meter(refresh time.Duration) {
 		}
 		delaystats[0], delaystats[1] = delayN, duration.Nanoseconds()
 
+		// 之后都是对获取的信息进行处理
+
 		// Retrieve the database iostats.
+		// 获取数据库IO的相关数据
 		ioStats, err := db.db.GetProperty("leveldb.iostats")
 		if err != nil {
 			db.log.Error("Failed to read database iostats", "err", err)
@@ -429,6 +440,7 @@ func (db *Database) meter(refresh time.Duration) {
 		db.seekCompGauge.Update(int64(seekComp))
 
 		// Sleep a bit, then repeat the stats collection
+		// 之后都是对获取的信息进行处理
 		select {
 		case errc = <-db.quitChan:
 			// Quit requesting, stop hammering the database

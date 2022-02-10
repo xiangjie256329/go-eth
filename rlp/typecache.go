@@ -142,6 +142,8 @@ type field struct {
 	optional bool
 }
 
+//这个函数定义了结构体的编码方式， 通过structFields方法得到了所有的字段的编码器，
+//然后返回一个方法，这个方法遍历所有的字段，每个字段调用其编码器方法。
 // structFields resolves the typeinfo of all public fields in a struct type.
 func structFields(typ reflect.Type) (fields []field, err error) {
 	var (

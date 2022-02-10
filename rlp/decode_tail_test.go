@@ -41,6 +41,7 @@ func ExampleDecode_structTagTail() {
 	// fill fields A and B:
 	err = Decode(bytes.NewReader([]byte{0xC1, 0x01}), &val)
 	fmt.Printf("with 1 element: err=%q\n", err)
+	fmt.Println("a")
 
 	// Output:
 	// with 4 elements: err=<nil> val={1 2 [3 4]}

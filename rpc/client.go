@@ -74,6 +74,7 @@ type BatchElem struct {
 // Client represents a connection to an RPC server.
 type Client struct {
 	idgen    func() ID // for subscriptions
+	//HTTP协议和非HTTP协议有不同的处理流程， HTTP协议不支持长连接， 只支持一个请求对应一个回应的这种模式，同时也不支持发布/订阅模式。
 	isHTTP   bool      // connection type: http, ws or ipc
 	services *serviceRegistry
 
@@ -85,9 +86,13 @@ type Client struct {
 	// writeConn is used for writing to the connection on the caller's goroutine. It should
 	// only be accessed outside of dispatch, with the write lock held. The write lock is
 	// taken by sending on reqInit and released by sending on reqSent.
+	//通过这里的注释可以看到，writeConn是调用这用来写入请求的网络连接对象，
+	//只有在dispatch方法外面调用才是安全的，而且需要通过给requestOp队列发送请求来获取锁，
+	//获取锁之后就可以把请求写入网络，写入完成后发送请求给sendDone队列来释放锁，供其它的请求使用。
 	writeConn jsonWriter
 
 	// for dispatch
+	//下面有很多的channel，channel一般来说是goroutine之间用来通信的通道，后续会随着代码介绍channel是如何使用的。
 	close       chan struct{}
 	closing     chan struct{}    // closed when client is quitting
 	didClose    chan struct{}    // closed when client quits
@@ -279,6 +284,7 @@ func (c *Client) SetHeader(key, value string) {
 //
 // The result must be a pointer so that package json can unmarshal into it. You
 // can also pass nil, in which case the result is ignored.
+//返回值必须是一个指针，这样才能把json值转换成对象。 如果你不关心返回值，也可以通过传nil来忽略。
 func (c *Client) Call(result interface{}, method string, args ...interface{}) error {
 	ctx := context.Background()
 	return c.CallContext(ctx, result, method, args...)
@@ -297,6 +303,7 @@ func (c *Client) CallContext(ctx context.Context, result interface{}, method str
 	if err != nil {
 		return err
 	}
+	//构建了一个requestOp对象。 resp是读取返回的队列，队列的长度是1。
 	op := &requestOp{ids: []json.RawMessage{msg.ID}, resp: make(chan *jsonrpcMessage, 1)}
 
 	if c.isHTTP {
@@ -430,6 +437,10 @@ func (c *Client) ShhSubscribe(ctx context.Context, channel interface{}, args ...
 // before considering the subscriber dead. The subscription Err channel will receive
 // ErrSubscriptionQueueOverflow. Use a sufficiently large buffer on the channel or ensure
 // that the channel usually has at least one reader to prevent this issue.
+//Subscribe会使用传入的参数调用"<namespace>_subscribe"方法来订阅指定的消息。
+//服务器的通知会写入channel参数指定的队列。 channel参数必须和返回的类型相同。
+//ctx参数可以用来取消RPC的请求，但是如果订阅已经完成就不会有效果了。
+//处理速度太慢的订阅者的消息会被删除，每个客户端有8000个消息的缓存。
 func (c *Client) Subscribe(ctx context.Context, namespace string, channel interface{}, args ...interface{}) (*ClientSubscription, error) {
 	// Check type of channel first.
 	chanVal := reflect.ValueOf(channel)
@@ -447,6 +458,7 @@ func (c *Client) Subscribe(ctx context.Context, namespace string, channel interf
 	if err != nil {
 		return nil, err
 	}
+	//requestOp的参数和Call调用的不一样。 多了一个参数sub.
 	op := &requestOp{
 		ids:  []json.RawMessage{msg.ID},
 		resp: make(chan *jsonrpcMessage),

@@ -283,6 +283,8 @@ func (t *Trie) TryUpdate(key, value []byte) error {
 	return nil
 }
 
+// 输入依次为：当前插入的节点（位置），插入的key的前缀，插入的key，插入的value
+// 输出依次为：该树是否dirty，插入完成的子数根节点，错误信息
 func (t *Trie) insert(n node, prefix, key []byte, value node) (bool, node, error) {
 	if len(key) == 0 {
 		if v, ok := n.(valueNode); ok {
@@ -292,6 +294,8 @@ func (t *Trie) insert(n node, prefix, key []byte, value node) (bool, node, error
 	}
 	switch n := n.(type) {
 	case *shortNode:
+		// 取插入值的key和当前node的key对比，取最二者的共同前缀
+		// 如果插入key和之前一样，那么只需要更新值
 		matchlen := prefixLen(key, n.Key)
 		// If the whole key matches, keep this short node as is
 		// and only update the value.
@@ -302,9 +306,11 @@ func (t *Trie) insert(n node, prefix, key []byte, value node) (bool, node, error
 			}
 			return true, &shortNode{n.Key, nn, t.newFlag()}, nil
 		}
+		// 构建一个branch节点
 		// Otherwise branch out at the index where they differ.
 		branch := &fullNode{flags: t.newFlag()}
 		var err error
+		// 分别把这两个key插入一个branch当中
 		_, branch.Children[n.Key[matchlen]], err = t.insert(nil, append(prefix, n.Key[:matchlen+1]...), n.Key[matchlen+1:], n.Val)
 		if err != nil {
 			return false, nil, err
@@ -314,13 +320,17 @@ func (t *Trie) insert(n node, prefix, key []byte, value node) (bool, node, error
 			return false, nil, err
 		}
 		// Replace this shortNode with the branch if it occurs at index 0.
+		// matchlen为0，表明二者没有共同前缀，可以“分叉”，说明该子树肯定为branch节点
+		// Replace this shortNode with the branch if it occurs at index 0.
 		if matchlen == 0 {
 			return true, branch, nil
 		}
 		// Otherwise, replace it with a short node leading up to the branch.
+		// matchlen不为0， 说明有共同前缀，当前子树为Extension Node，该拓展节点指向一个
 		return true, &shortNode{key[:matchlen], branch, t.newFlag()}, nil
 
 	case *fullNode:
+		// 在branch节点插入
 		dirty, nn, err := t.insert(n.Children[key[0]], append(prefix, key[0]), key[1:], value)
 		if !dirty || err != nil {
 			return false, n, err
@@ -329,11 +339,13 @@ func (t *Trie) insert(n node, prefix, key []byte, value node) (bool, node, error
 		n.flags = t.newFlag()
 		n.Children[key[0]] = nn
 		return true, n, nil
-
+	// 节点为新的节点，直接返回shortNode，也就是叶子结点
 	case nil:
 		return true, &shortNode{key, value, t.newFlag()}, nil
 
 	case hashNode:
+		// 如果当前节点是hashNode, hashNode的意思是当前节点还没有加载到内存里面来，还是存放在数据库里面，
+		// 那么首先调用 t.resolveHash(n, prefix)来加载到内存，然后对加载出来的节点调用insert方法来进行插入。
 		// We've hit a part of the trie that isn't loaded yet. Load
 		// the node and insert into it. This leaves all child nodes on
 		// the path to the value in the trie.
@@ -524,7 +536,10 @@ func (t *Trie) Hash() common.Hash {
 
 // Commit writes all nodes to the trie's memory database, tracking the internal
 // and external (for account tries) references.
+//Commit()的主要逻辑几乎都在h.hash(t.root, db, true)这里，所以我们接下来看看hash函数。hash方法主要做了两个操作。
+// 一个是保留原有的树形结构，并用cache变量中， 另一个是计算原有树形结构的hash并把hash值存放到cache变量中保存下来
 func (t *Trie) Commit(onleaf LeafCallback) (common.Hash, int, error) {
+	// 判断db的合法性
 	if t.db == nil {
 		panic("commit called on trie with nil database")
 	}

@@ -19,6 +19,8 @@ package ethdb
 
 import "io"
 
+//levelDB的封装代码
+
 // KeyValueReader wraps the Has and Get method of a backing data store.
 type KeyValueReader interface {
 	// Has retrieves if a key is present in the key-value data store.
@@ -146,6 +148,7 @@ type AncientStore interface {
 
 // Database contains all the methods required by the high level database to not
 // only access the key-value data store but also the chain freezer.
+// 数据库接口定义了所有的数据库操作， 所有的方法都是多线程安全的。
 type Database interface {
 	Reader
 	Writer
