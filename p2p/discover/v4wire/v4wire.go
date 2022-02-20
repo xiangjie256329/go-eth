@@ -47,13 +47,13 @@ const (
 // RPC request structures
 type (
 	Ping struct {
-		Version    uint
-		From, To   Endpoint
+		Version    uint	//协议版本
+		From, To   Endpoint	//源IP地址 目的IP地址
 		Expiration uint64
 		ENRSeq     uint64 `rlp:"optional"` // Sequence number of local record, added by EIP-868.
 
 		// Ignore additional fields (for forward compatibility).
-		Rest []rlp.RawValue `rlp:"tail"`
+		Rest []rlp.RawValue `rlp:"tail"`	//可以忽略的字段。 为了向前兼容
 	}
 
 	// Pong is the reply to ping.
@@ -62,7 +62,9 @@ type (
 		// of the ping packet, which provides a way to discover the
 		// the external address (after NAT).
 		To         Endpoint
+		// 说明这个pong包是回应那个ping包的。 包含了ping包的hash值
 		ReplyTok   []byte // This contains the hash of the ping packet.
+		//包超时的绝对时间。 如果收到包的时候超过了这个时间，那么包被认为是超时的。
 		Expiration uint64 // Absolute timestamp at which the packet becomes invalid.
 		ENRSeq     uint64 `rlp:"optional"` // Sequence number of local record, added by EIP-868.
 
@@ -79,7 +81,9 @@ type (
 	}
 
 	// Neighbors is the reply to findnode.
+	// findnode的回应
 	Neighbors struct {
+		//距离target比较近的节点值。
 		Nodes      []Node
 		Expiration uint64
 		// Ignore additional fields (for forward compatibility).

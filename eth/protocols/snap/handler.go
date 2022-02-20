@@ -154,6 +154,7 @@ func HandleMessage(backend Backend, peer *Peer) error {
 		}(start)
 	}
 	// Handle the message depending on its contents
+	// 接收到请求区块头的消息， 会根据请求返回区块头信息。
 	switch {
 	case msg.Code == GetAccountRangeMsg:
 		// Decode the account retrieval request

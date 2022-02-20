@@ -100,6 +100,7 @@ type bucket struct {
 }
 
 func newTable(t transport, db *enode.DB, bootnodes []*enode.Node, log log.Logger) (*Table, error) {
+	//这个在之前的database.go里面有介绍。 打开leveldb。如果path为空。那么打开一个基于内存的db
 	tab := &Table{
 		net:        t,
 		db:         db,
@@ -184,6 +185,7 @@ func (tab *Table) close() {
 // setFallbackNodes sets the initial points of contact. These nodes
 // are used to connect to the network if the table is empty and there
 // are no known nodes in the database.
+//这个方法设置初始化的联系节点。 在table是空而且数据库里面也没有已知的节点，这些节点可以帮助连接上网络，
 func (tab *Table) setFallbackNodes(nodes []*enode.Node) error {
 	for _, n := range nodes {
 		if err := n.ValidateComplete(); err != nil {
@@ -278,6 +280,7 @@ loop:
 
 // doRefresh performs a lookup for a random target to keep buckets full. seed nodes are
 // inserted if the table is empty (initial bootstrap or discarded faulty peers).
+// doRefresh 随机查找一个目标，以便保持buckets是满的。如果table是空的，那么种子节点会插入。 （比如最开始的启动或者是删除错误的节点之后）
 func (tab *Table) doRefresh(done chan struct{}) {
 	defer close(done)
 

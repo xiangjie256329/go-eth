@@ -120,6 +120,7 @@ func newPersistentDB(path string) (*DB, error) {
 
 	case nil:
 		// Version present, flush if different
+		//版本不同，先删除所有的数据库文件，重新创建一个。
 		if !bytes.Equal(blob, currentVer) {
 			db.Close()
 			if err = os.RemoveAll(path); err != nil {
@@ -296,7 +297,8 @@ func deleteRange(db *leveldb.DB, prefix []byte) {
 // ensureExpirer is a small helper method ensuring that the data expiration
 // mechanism is running. If the expiration goroutine is already running, this
 // method simply returns.
-//
+// ensureExpirer方法用来确保expirer方法在运行。 如果expirer已经运行，那么这个方法就直接返回。
+// 这个方法设置的目的是为了在网络成功启动后在开始进行数据超时丢弃的工作(以防一些潜在的有用的种子节点被丢弃)。
 // The goal is to start the data evacuation only after the network successfully
 // bootstrapped itself (to prevent dumping potentially useful seed nodes). Since
 // it would require significant overhead to exactly trace the first successful
@@ -323,6 +325,7 @@ func (db *DB) expirer() {
 
 // expireNodes iterates over the database and deletes all nodes that have not
 // been seen (i.e. received a pong from) for some time.
+//这个方法遍历所有的节点，如果某个节点最后接收消息超过指定值，那么就删除这个节点。
 func (db *DB) expireNodes() {
 	it := db.lvl.NewIterator(util.BytesPrefix([]byte(dbNodePrefix)), nil)
 	defer it.Release()
@@ -444,6 +447,7 @@ func (db *DB) storeLocalSeq(id ID, n uint64) {
 
 // QuerySeeds retrieves random nodes to be used as potential seed nodes
 // for bootstrapping.
+//从数据库里面随机挑选合适种子节点
 func (db *DB) QuerySeeds(n int, maxAge time.Duration) []*Node {
 	var (
 		now   = time.Now()

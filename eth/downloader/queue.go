@@ -256,6 +256,7 @@ func (q *queue) ScheduleSkeleton(from uint64, skeleton []*types.Header) {
 		panic("skeleton assembly already in progress")
 	}
 	// Schedule all the header retrieval tasks for the skeleton assembly
+	// 因为这个方法在skeleton为false的时候不会调用。 所以一些初始化工作放在这里执行。
 	q.headerTaskPool = make(map[uint64]*types.Header)
 	q.headerTaskQueue = prque.New(nil)
 	q.headerPeerMiss = make(map[string]map[uint64]struct{}) // Reset availability to correct invalid chains
@@ -267,7 +268,7 @@ func (q *queue) ScheduleSkeleton(from uint64, skeleton []*types.Header) {
 
 	for i, header := range skeleton {
 		index := from + uint64(i*MaxHeaderFetch)
-
+		// 每隔MaxHeaderFetch这么远有一个header
 		q.headerTaskPool[index] = header
 		q.headerTaskQueue.Push(index, -int64(index))
 	}
@@ -287,6 +288,7 @@ func (q *queue) RetrieveHeaders() ([]*types.Header, []common.Hash, int) {
 
 // Schedule adds a set of headers for the download queue for scheduling, returning
 // the new headers encountered.
+// from表示headers里面第一个元素的区块高度。 返回值返回了所有被接收的header
 func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uint64) []*types.Header {
 	q.lock.Lock()
 	defer q.lock.Unlock()
@@ -300,6 +302,7 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 			log.Warn("Header broke chain ordering", "number", header.Number, "hash", hash, "expected", from)
 			break
 		}
+		//headerHead存储了最后一个插入的区块头， 检查当前区块是否正确的链接。
 		if q.headerHead != (common.Hash{}) && q.headerHead != header.ParentHash {
 			log.Warn("Header broke chain ancestry", "number", header.Number, "hash", hash)
 			break
@@ -307,6 +310,7 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 		// Make sure no duplicate requests are executed
 		// We cannot skip this, even if the block is empty, since this is
 		// what triggers the fetchResult creation.
+		// 检查重复，这里直接continue了，那不是from对不上了。
 		if _, ok := q.blockTaskPool[hash]; ok {
 			log.Warn("Header already scheduled for block fetch", "number", header.Number, "hash", hash)
 		} else {
@@ -318,6 +322,7 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 			if _, ok := q.receiptTaskPool[hash]; ok {
 				log.Warn("Header already scheduled for receipt fetch", "number", header.Number, "hash", hash)
 			} else {
+				// 如果是快速同步模式，而且区块高度也小于pivot point. 那么还要获取receipt
 				q.receiptTaskPool[hash] = header
 				q.receiptTaskQueue.Push(header, -int64(header.Number.Uint64()))
 			}
@@ -423,6 +428,7 @@ func (q *queue) ReserveHeaders(p *peerConnection, count int) *fetchRequest {
 		return nil
 	}
 	// Retrieve a batch of hashes, skipping previously failed ones
+	// 从队列中获取一个，跳过之前失败过的节点。
 	send, skip := uint64(0), []uint64{}
 	for send == 0 && !q.headerTaskQueue.Empty() {
 		from, _ := q.headerTaskQueue.Pop()
@@ -474,11 +480,11 @@ func (q *queue) ReserveReceipts(p *peerConnection, count int) (*fetchRequest, bo
 // reserveHeaders reserves a set of data download operations for a given peer,
 // skipping any previously failed ones. This method is a generic version used
 // by the individual special reservation functions.
-//
+// reserveHeaders为指定的peer保留一些下载操作，跳过之前的任意错误。 这个方法单独被指定的保留方法调用。
 // Note, this method expects the queue lock to be already held for writing. The
 // reason the lock is not obtained in here is because the parameters already need
 // to access the queue, so they already need a lock anyway.
-//
+// 这个方法调用的时候，假设已经获取到锁，这个方法里面没有锁的原因是参数已经传入到函数里面了，所以调用的时候就需要获取锁。
 // Returns:
 //   item     - the fetchRequest
 //   progress - whether any progress was made
@@ -490,6 +496,7 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 	if taskQueue.Empty() {
 		return nil, false, true
 	}
+	// 如果这个peer还有下载任务没有完成。
 	if _, ok := pendPool[p.id]; ok {
 		return nil, false, false
 	}
@@ -653,10 +660,11 @@ func (q *queue) expire(peer string, pendPool map[string]*fetchRequest, taskQueue
 // DeliverHeaders injects a header retrieval response into the header results
 // cache. This method either accepts all headers it received, or none of them
 // if they do not map correctly to the skeleton.
-//
+// 这个方法对于所有的区块头，要么全部接收，要么全部拒绝(如果不能映射到一个skeleton上面)
 // If the headers are accepted, the method makes an attempt to deliver the set
 // of ready headers to the processor to keep the pipeline full. However, it will
 // not block to prevent stalling other pending deliveries.
+// 如果区块头被接收，这个方法会试图把他们投递到headerProcCh管道上面。 不过这个方法不会阻塞式的投递。而是尝试投递，如果不能投递就返回。
 func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []common.Hash, headerProcCh chan *headerTask) (int, error) {
 	q.lock.Lock()
 	defer q.lock.Unlock()
@@ -683,7 +691,7 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 	target := q.headerTaskPool[request.From].Hash()
 
 	accepted := len(headers) == MaxHeaderFetch
-	if accepted {
+	if accepted { //首先长度需要匹配， 然后检查区块号和最后一块区块的Hash值是否能够对应上。
 		if headers[0].Number.Uint64() != request.From {
 			logger.Trace("First header broke chain ordering", "number", headers[0].Number, "hash", hashes[0], "expected", request.From)
 			accepted = false
@@ -692,7 +700,7 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 			accepted = false
 		}
 	}
-	if accepted {
+	if accepted { // 依次检查每一块区块的区块号， 以及链接是否正确。
 		parentHash := hashes[0]
 		for i, header := range headers[1:] {
 			hash := hashes[i+1]
@@ -711,7 +719,7 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 		}
 	}
 	// If the batch of headers wasn't accepted, mark as unavailable
-	if !accepted {
+	if !accepted { // 如果不被接收，那么标记这个peer在这个任务上的失败。下次请求就不会投递给这个peer
 		logger.Trace("Skeleton filling not accepted", "from", request.From)
 		headerDropMeter.Mark(int64(len(headers)))
 
@@ -732,6 +740,7 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 	delete(q.headerTaskPool, request.From)
 
 	ready := 0
+	//计算这次到来的header可以让headerResults有多少数据可以投递了。
 	for q.headerProced+ready < len(q.headerResults) && q.headerResults[q.headerProced+ready] != nil {
 		ready += MaxHeaderFetch
 	}
@@ -742,7 +751,7 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 
 		processHashes := make([]common.Hash, ready)
 		copy(processHashes, q.headerHashes[q.headerProced:q.headerProced+ready])
-
+		// 尝试投递
 		select {
 		case headerProcCh <- &headerTask{
 			headers: processHeaders,
@@ -755,6 +764,7 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 	}
 	// Check for termination and return
 	if len(q.headerTaskPool) == 0 {
+		// 这个通道比较重要， 如果这个通道接收到数据，说明所有的header任务已经完成。
 		q.headerContCh <- false
 	}
 	return len(headers), nil
@@ -763,6 +773,8 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 // DeliverBodies injects a block body retrieval response into the results queue.
 // The method returns the number of blocks bodies accepted from the delivery and
 // also wakes any threads waiting for data delivery.
+// DeliverBodies把一个 请求区块体的返回值插入到results队列
+// 这个方法返回被delivery的区块体数量，同时会唤醒等待数据的线程
 func (q *queue) DeliverBodies(id string, txLists [][]*types.Transaction, txListHashes []common.Hash, uncleLists [][]*types.Header, uncleListHashes []common.Hash) (int, error) {
 	q.lock.Lock()
 	defer q.lock.Unlock()
@@ -819,6 +831,7 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 	reconstruct func(index int, result *fetchResult)) (int, error) {
 
 	// Short circuit if the data was never requested
+	// 检查 数据是否从来没有请求过。
 	request := pendPool[id]
 	if request == nil {
 		resDropMeter.Mark(int64(results))
@@ -831,6 +844,7 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 
 	// If no data items were retrieved, mark them as unavailable for the origin peer
 	if results == 0 {
+		//如果结果为空。 那么标识这个peer没有这些数据。
 		for _, header := range request.Headers {
 			request.Peer.MarkLacking(header.Hash())
 		}
@@ -873,10 +887,12 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 	resDropMeter.Mark(int64(results - accepted))
 
 	// Return all failed or missing fetches to the queue
+	// 所有没有成功的请求加入taskQueue
 	for _, header := range request.Headers[accepted:] {
 		taskQueue.Push(header, -int64(header.Number.Uint64()))
 	}
 	// Wake up Results
+	// 如果结果有变更，通知WaitResults线程启动。
 	if accepted > 0 {
 		q.active.Signal()
 	}

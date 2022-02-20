@@ -650,7 +650,7 @@ func (q *queue) ExpireReceipts(timeout time.Duration) map[string]int {
 
 // expire is the generic check that move expired tasks from a pending pool back
 // into a task pool, returning all entities caught with expired tasks.
-//
+// expire是通用检查，将过期任务从待处理池移回任务池，返回所有捕获已到期任务的实体。
 // Note, this method expects the queue lock to be already held. The
 // reason the lock is not obtained in here is because the parameters already need
 // to access the queue, so they already need a lock anyway.

@@ -41,6 +41,7 @@ const (
 )
 
 // announce represents an new block announcement from the les server.
+// announce 是一个hash通知，表示网络上有合适的新区块出现。
 type announce struct {
 	data   *announceData
 	trust  bool

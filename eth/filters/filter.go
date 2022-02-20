@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// 后端， 这个后端其实是在core里面实现的。 布隆过滤器的主要算法在core里面实现了
 type Backend interface {
 	ChainDb() ethdb.Database
 	HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error)
@@ -49,16 +50,16 @@ type Backend interface {
 
 // Filter can be used to retrieve and filter logs.
 type Filter struct {
-	backend Backend
+	backend Backend	// 后端
 
-	db        ethdb.Database
-	addresses []common.Address
-	topics    [][]common.Hash
+	db        ethdb.Database	// 数据库
+	addresses []common.Address	// 筛选地址
+	topics    [][]common.Hash	// 筛选主题
 
 	block      common.Hash // Block hash if filtering a single block
-	begin, end int64       // Range interval if filtering multiple blocks
+	begin, end int64       // Range interval if filtering multiple blocks	// 开始结束区块
 
-	matcher *bloombits.Matcher
+	matcher *bloombits.Matcher	// 布隆过滤器的匹配器
 }
 
 // NewRangeFilter creates a new filter which uses a bloom filter on blocks to
@@ -116,6 +117,7 @@ func newFilter(backend Backend, addresses []common.Address, topics [][]common.Ha
 
 // Logs searches the blockchain for matching log entries, returning all from the
 // first block that contains matches, updating the start of the filter accordingly.
+// Logs 执行过滤
 func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 	// If we're doing singleton block filtering, execute and return
 	if f.block != (common.Hash{}) {
@@ -148,6 +150,8 @@ func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 		err  error
 	)
 	size, sections := f.backend.BloomStatus()
+	// indexed 是指创建了索引的区块的最大值。 如果过滤的范围落在了创建了索引的部分。
+	// 那么执行索引搜索。
 	if indexed := sections * size; indexed > uint64(f.begin) {
 		if indexed > end {
 			logs, err = f.indexedLogs(ctx, end)
@@ -158,17 +162,20 @@ func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 			return logs, err
 		}
 	}
+	// 对于剩下的部分执行非索引的搜索。
 	rest, err := f.unindexedLogs(ctx, end)
 	logs = append(logs, rest...)
 	return logs, err
 }
 
+// 索引搜索
 // indexedLogs returns the logs matching the filter criteria based on the bloom
 // bits indexed available locally or via the network.
 func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, error) {
 	// Create a matcher session and request servicing from the backend
 	matches := make(chan uint64, 64)
 
+	// 启动matcher
 	session, err := f.matcher.Start(ctx, uint64(f.begin), end, matches)
 	if err != nil {
 		return nil, err
@@ -184,10 +191,10 @@ func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, err
 		select {
 		case number, ok := <-matches:
 			// Abort if all matches have been fulfilled
-			if !ok {
+			if !ok {	// 没有接收到值并且channel已经被关闭
 				err := session.Error()
 				if err == nil {
-					f.begin = int64(end) + 1
+					f.begin = int64(end) + 1	//更新begin。以便于下面的非索引搜索
 				}
 				return logs, err
 			}
@@ -198,7 +205,7 @@ func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, err
 			if header == nil || err != nil {
 				return logs, err
 			}
-			found, err := f.checkMatches(ctx, header)
+			found, err := f.checkMatches(ctx, header)	//查找匹配的值
 			if err != nil {
 				return logs, err
 			}
@@ -212,6 +219,8 @@ func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, err
 
 // unindexedLogs returns the logs matching the filter criteria based on raw block
 // iteration and bloom matching.
+// 非索引查询，循环遍历所有的区块。 首先用区块里面的header.Bloom来看是否有可能存在，
+// 如果有可能存在， 再使用checkMatches来检索所有的匹配。
 func (f *Filter) unindexedLogs(ctx context.Context, end uint64) ([]*types.Log, error) {
 	var logs []*types.Log
 
@@ -243,6 +252,7 @@ func (f *Filter) blockLogs(ctx context.Context, header *types.Header) (logs []*t
 
 // checkMatches checks if the receipts belonging to the given header contain any log events that
 // match the filter criteria. This function is called when the bloom filter signals a potential match.
+// 拿到所有的收据，并从收据中拿到所有的日志。 执行filterLogs方法。
 func (f *Filter) checkMatches(ctx context.Context, header *types.Header) (logs []*types.Log, err error) {
 	// Get the logs of the block
 	logsList, err := f.backend.GetLogs(ctx, header.Hash())
@@ -283,6 +293,7 @@ func includes(addresses []common.Address, a common.Address) bool {
 }
 
 // filterLogs creates a slice of logs matching the given criteria.
+// 这个方法从给定的logs里面找到能够匹配上的。并返回。
 func filterLogs(logs []*types.Log, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) []*types.Log {
 	var ret []*types.Log
 Logs:

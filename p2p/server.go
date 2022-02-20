@@ -455,7 +455,7 @@ func (srv *Server) Start() (err error) {
 	if srv.PrivateKey == nil {
 		return errors.New("Server.PrivateKey must be set to a non-nil key")
 	}
-	if srv.newTransport == nil {
+	if srv.newTransport == nil {	//这里注意的是Transport使用了newRLPX 使用了rlpx.go中的网络协议。
 		srv.newTransport = newRLPX
 	}
 	if srv.listenFunc == nil {
@@ -478,7 +478,7 @@ func (srv *Server) Start() (err error) {
 			return err
 		}
 	}
-	if err := srv.setupDiscovery(); err != nil {
+	if err := srv.setupDiscovery(); err != nil {//启动discover网络。 开启UDP的监听。
 		return err
 	}
 	srv.setupDialScheduler()
@@ -704,6 +704,7 @@ func (srv *Server) run() {
 		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
 	)
 	// Put trusted nodes into a map to speed up checks.
+	// 被信任的节点又这样一个特性， 如果连接太多，那么其他节点会被拒绝掉。但是被信任的节点会被接收。
 	// Trusted peers are loaded on startup or added via AddTrustedPeer RPC.
 	for _, n := range srv.TrustedNodes {
 		trusted[n.ID()] = true
@@ -752,6 +753,9 @@ running:
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
+			// 两次握手之后会调用checkpoint把连接发送到addpeer这个channel。
+			// 然后通过newPeer创建了Peer对象。
+			// 启动一个goroutine 启动peer对象。 调用了peer.run方法。
 			err := srv.addPeerChecks(peers, inboundCount, c)
 			if err == nil {
 				// The handshakes are done and it passed all checks.
@@ -835,6 +839,7 @@ func (srv *Server) listenLoop() {
 	if srv.MaxPendingPeers > 0 {
 		tokens = srv.MaxPendingPeers
 	}
+	//创建maxAcceptConns个槽位。 我们只同时处理这么多连接。 多了也不要。
 	slots := make(chan struct{}, tokens)
 	for i := 0; i < tokens; i++ {
 		slots <- struct{}{}
@@ -891,6 +896,7 @@ func (srv *Server) listenLoop() {
 			srv.log.Trace("Accepted connection", "addr", fd.RemoteAddr())
 		}
 		go func() {
+			//看来只要连接建立完成之后。 槽位就会归还。 SetupConn这个函数我们记得再dialTask.Do里面也有调用， 这个函数主要是执行连接的几次握手。
 			srv.SetupConn(fd, inboundConn, nil)
 			slots <- struct{}{}
 		}()
@@ -902,6 +908,7 @@ func (srv *Server) checkInboundConn(remoteIP net.IP) error {
 		return nil
 	}
 	// Reject connections that do not match NetRestrict.
+	// 白名单。 如果不在白名单里面。那么关闭连接。
 	if srv.NetRestrict != nil && !srv.NetRestrict.Contains(remoteIP) {
 		return fmt.Errorf("not in netrestrict list")
 	}
@@ -919,6 +926,7 @@ func (srv *Server) checkInboundConn(remoteIP net.IP) error {
 // as a peer. It returns when the connection has been added as a peer
 // or the handshakes have failed.
 func (srv *Server) SetupConn(fd net.Conn, flags connFlag, dialDest *enode.Node) error {
+	//创建了一个conn对象。 newTransport指针实际上指向的newRLPx方法。 实际上是把fd用rlpx协议包装了一下。
 	c := &conn{fd: fd, flags: flags, cont: make(chan error)}
 	if dialDest == nil {
 		c.transport = srv.newTransport(fd, nil)
@@ -944,6 +952,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 
 	// If dialing, figure out the remote public key.
 	var dialPubkey *ecdsa.PublicKey
+	// 如果连接握手的ID和对应的ID不匹配
 	if dialDest != nil {
 		dialPubkey = new(ecdsa.PublicKey)
 		if err := dialDest.Load((*enode.Secp256k1)(dialPubkey)); err != nil {
@@ -965,6 +974,8 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 		c.node = nodeFromConn(remotePubkey, c.fd)
 	}
 	clog := srv.log.New("id", c.node.ID(), "addr", c.fd.RemoteAddr(), "conn", c.flags)
+	// 这个checkpoint其实就是把第一个参数发送给第二个参数指定的队列。然后从c.cout接收返回信息。 是一个同步的方法。
+	//至于这里，后续的操作只是检查了一下连接是否合法就返回了。
 	err = srv.checkpoint(c, srv.checkpointPostHandshake)
 	if err != nil {
 		clog.Trace("Rejected peer", "err", err)
@@ -982,6 +993,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 		return DiscUnexpectedIdentity
 	}
 	c.caps, c.name = phs.Caps, phs.Name
+	// 这里两次握手都已经完成了。 把c发送给addpeer队列。 后台处理这个队列的时候，会处理这个连接
 	err = srv.checkpoint(c, srv.checkpointAddPeer)
 	if err != nil {
 		clog.Trace("Rejected peer", "err", err)

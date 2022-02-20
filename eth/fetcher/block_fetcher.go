@@ -99,7 +99,7 @@ type chainInsertFn func(types.Blocks) (int, error)
 type peerDropFn func(id string)
 
 // blockAnnounce is the hash notification of the availability of a new block in the
-// network.
+// network. 表示网络上有合适的新区块出现。
 type blockAnnounce struct {
 	hash   common.Hash   // Hash of the block being announced
 	number uint64        // Number of the block being announced (0 = unknown | old protocol)
@@ -128,7 +128,7 @@ type bodyFilterTask struct {
 	time         time.Time              // Arrival time of the blocks' contents
 }
 
-// blockOrHeaderInject represents a schedules import operation.
+// blockOrHeaderInject represents a schedules import operation. 当节点收到NewBlockMsg的消息时候，会插入一个区块
 type blockOrHeaderInject struct {
 	origin string
 
@@ -343,12 +343,15 @@ func (f *BlockFetcher) loop() {
 
 	for {
 		// Clean up any expired block fetches
+		// 如果fetching的时间超过5秒，那么放弃掉这个fetching
 		for hash, announce := range f.fetching {
 			if time.Since(announce.time) > fetchTimeout {
 				f.forgetHash(hash)
 			}
 		}
 		// Import any queued blocks that could potentially fit
+		// 这个fetcher.queue里面缓存了已经完成fetch的block等待按照顺序插入到本地的区块链中
+		//fetcher.queue是一个优先级队列。 优先级别就是他们的区块号的负数，这样区块数小的排在最前面。
 		height := f.chainHeight()
 		for !f.queue.Empty() {
 			op := f.queue.PopItem().(*blockOrHeaderInject)
@@ -358,7 +361,7 @@ func (f *BlockFetcher) loop() {
 			}
 			// If too high up the chain or phase, continue later
 			number := op.number()
-			if number > height+1 {
+			if number > height+1 { //当前的区块的高度太高，还不能import
 				f.queue.Push(op, -int64(number))
 				if f.queueChangeHook != nil {
 					f.queueChangeHook(hash, true)
@@ -367,6 +370,8 @@ func (f *BlockFetcher) loop() {
 			}
 			// Otherwise if fresh and still unknown, try and import
 			if (number+maxUncleDist < height) || (f.light && f.getHeader(hash) != nil) || (!f.light && f.getBlock(hash) != nil) {
+				// 区块的高度太低 低于当前的height-maxUncleDist
+				// 或者区块已经被import了
 				f.forgetBlock(hash)
 				continue
 			}
@@ -382,7 +387,7 @@ func (f *BlockFetcher) loop() {
 			// BlockFetcher terminating, abort all operations
 			return
 
-		case notification := <-f.notify:
+		case notification := <-f.notify://在接收到NewBlockHashesMsg的时候，对于本地区块链还没有的区块的hash值会调用fetcher的Notify方法发送到notify通道。
 			// A block was announced, make sure the peer isn't DOSing us
 			blockAnnounceInMeter.Mark(1)
 
@@ -396,6 +401,7 @@ func (f *BlockFetcher) loop() {
 				break
 			}
 			// If we have a valid block number, check that it's potentially useful
+			// 查看是潜在是否有用。 根据这个区块号和本地区块链的距离， 太大和太小对于我们都没有意义。
 			if dist := int64(notification.number) - int64(f.chainHeight()); dist < -maxUncleDist || dist > maxQueueDist {
 				log.Debug("Peer discarded announcement", "peer", notification.origin, "number", notification.number, "hash", notification.hash, "distance", dist)
 				blockAnnounceDropMeter.Mark(1)
@@ -417,7 +423,7 @@ func (f *BlockFetcher) loop() {
 				f.rescheduleFetch(fetchTimer)
 			}
 
-		case op := <-f.inject:
+		case op := <-f.inject:// 在接收到NewBlockMsg的时候会调用fetcher的Enqueue方法，这个方法会把当前接收到的区块发送到inject通道。
 			// A direct block insertion was requested, try and fill any pending gaps
 			blockBroadcastInMeter.Mark(1)
 
@@ -428,12 +434,12 @@ func (f *BlockFetcher) loop() {
 			}
 			f.enqueue(op.origin, nil, op.block)
 
-		case hash := <-f.done:
+		case hash := <-f.done://当完成一个区块的import的时候会发送该区块的hash值到done通道。
 			// A pending import finished, remove all traces of the notification
 			f.forgetHash(hash)
 			f.forgetBlock(hash)
 
-		case <-fetchTimer.C:
+		case <-fetchTimer.C:// fetchTimer定时器，定期对需要fetch的区块头进行fetch
 			// At least one block's timer ran out, check for needing retrieval
 			request := make(map[string][]common.Hash)
 
@@ -488,7 +494,7 @@ func (f *BlockFetcher) loop() {
 			// Schedule the next fetch if blocks are still pending
 			f.rescheduleFetch(fetchTimer)
 
-		case <-completeTimer.C:
+		case <-completeTimer.C:// completeTimer定时器定期对需要fetch的区块体进行fetch
 			// At least one header's timer ran out, retrieve everything
 			request := make(map[string][]common.Hash)
 
@@ -533,7 +539,7 @@ func (f *BlockFetcher) loop() {
 			// Schedule the next fetch if blocks are still pending
 			f.rescheduleComplete(completeTimer)
 
-		case filter := <-f.headerFilter:
+		case filter := <-f.headerFilter: //当接收到BlockHeadersMsg的消息的时候(接收到一些区块头),会把这些消息投递到headerFilter队列。 这边会把属于fetcher请求的数据留下，其他的会返回出来，给其他系统使用。
 			// Headers arrived from a remote peer. Extract those that were explicitly
 			// requested by the fetcher, and return everything else so it's delivered
 			// to other parts of the system.
@@ -552,8 +558,10 @@ func (f *BlockFetcher) loop() {
 				hash := header.Hash()
 
 				// Filter fetcher-requested headers from other synchronisation algorithms
+				// 根据情况看这个是否是我们的请求返回的信息。
 				if announce := f.fetching[hash]; announce != nil && announce.origin == task.peer && f.fetched[hash] == nil && f.completing[hash] == nil && f.queued[hash] == nil {
 					// If the delivered header does not match the promised number, drop the announcer
+					// 如果返回的header的区块高度和我们请求的不同，那么删除掉返回这个header的peer。 并且忘记掉这个hash(以便于重新获取区块信息)
 					if header.Number.Uint64() != announce.number {
 						log.Trace("Invalid block number fetched", "peer", announce.origin, "hash", header.Hash(), "announced", announce.number, "provided", header.Number)
 						f.dropPeer(announce.origin)
@@ -576,6 +584,7 @@ func (f *BlockFetcher) loop() {
 						announce.time = task.time
 
 						// If the block is empty (header only), short circuit into the final import queue
+						// 根据区块头查看，如果这个区块不包含任何交易或者是Uncle区块。那么我们就不用获取区块的body了。 那么直接插入完成列表。
 						if header.TxHash == types.EmptyRootHash && header.UncleHash == types.EmptyUncleHash {
 							log.Trace("Block empty, skipping body retrieval", "peer", announce.origin, "number", header.Number, "hash", header.Hash())
 
@@ -587,6 +596,7 @@ func (f *BlockFetcher) loop() {
 							continue
 						}
 						// Otherwise add to the list of blocks needing completion
+						// 否则，插入到未完成列表等待fetch blockbody
 						incomplete = append(incomplete, announce)
 					} else {
 						log.Trace("Block already imported, discarding header", "peer", announce.origin, "number", header.Number, "hash", header.Hash())
@@ -609,8 +619,9 @@ func (f *BlockFetcher) loop() {
 				if _, ok := f.completing[hash]; ok {
 					continue
 				}
+				// 放到等待获取body的map等待处理。
 				f.fetched[hash] = append(f.fetched[hash], announce)
-				if len(f.fetched) == 1 {
+				if len(f.fetched) == 1 { //如果fetched map只有刚刚加入的一个元素。 那么重置计时器。
 					f.rescheduleComplete(completeTimer)
 				}
 			}
@@ -619,13 +630,14 @@ func (f *BlockFetcher) loop() {
 				f.enqueue(announce.origin, announce.header, nil)
 			}
 			// Schedule the header-only blocks for import
+			// 这些只有header的区块放入queue等待import
 			for _, block := range complete {
 				if announce := f.completing[block.Hash()]; announce != nil {
 					f.enqueue(announce.origin, nil, block)
 				}
 			}
 
-		case filter := <-f.bodyFilter:
+		case filter := <-f.bodyFilter://当接收到BlockBodiesMsg消息的时候，会把这些消息投递给bodyFilter队列。这边会把属于fetcher请求的数据留下，其他的会返回出来，给其他系统使用。
 			// Block bodies arrived, extract any explicitly requested blocks, return the rest
 			var task *bodyFilterTask
 			select {

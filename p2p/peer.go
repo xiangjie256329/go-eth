@@ -455,7 +455,7 @@ func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 	msg.Code += rw.offset
 
 	select {
-	case <-rw.wstart:
+	case <-rw.wstart://等到可以写入的受在执行写入
 		err = rw.w.WriteMsg(msg)
 		// Report write status back to Peer.run. It will initiate
 		// shutdown if the error is non-nil and unblock the next write

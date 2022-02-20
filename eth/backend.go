@@ -79,17 +79,17 @@ type Ethereum struct {
 	chainDb ethdb.Database // Block chain database
 
 	eventMux       *event.TypeMux
-	engine         consensus.Engine
+	engine         consensus.Engine	//一致性引擎。 应该是Pow部分
 	accountManager *accounts.Manager
 
-	bloomRequests     chan chan *bloombits.Retrieval // Channel receiving bloom data retrieval requests
-	bloomIndexer      *core.ChainIndexer             // Bloom indexer operating during block imports
+	bloomRequests     chan chan *bloombits.Retrieval // Channel receiving bloom data retrieval requests 接收bloom过滤器数据请求的通道
+	bloomIndexer      *core.ChainIndexer             // Bloom indexer operating during block imports	//在区块import的时候执行Bloom indexer操作
 	closeBloomHandler chan struct{}
 
 	APIBackend *EthAPIBackend
 
 	miner     *miner.Miner
-	gasPrice  *big.Int
+	gasPrice  *big.Int	//节点接收的gasPrice的最小值。 比这个值更小的交易会被本节点拒绝
 	etherbase common.Address
 
 	networkID     uint64
@@ -132,10 +132,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	ethashConfig.NotifyFull = config.Miner.NotifyFull
 
 	// Assemble the Ethereum object
+	// 创建leveldb。 打开或者新建 chaindata目录
 	chainDb, err := stack.OpenDatabaseWithFreezer("chaindata", config.DatabaseCache, config.DatabaseHandles, config.DatabaseFreezer, "eth/db/chaindata/", false)
 	if err != nil {
 		return nil, err
 	}
+	// 设置创世区块。 如果数据库里面已经有创世区块那么从数据库里面取出(私链)。或者是从代码里面获取默认值。
 	chainConfig, genesisHash, genesisErr := core.SetupGenesisBlockWithOverride(chainDb, config.Genesis, config.OverrideArrowGlacier, config.OverrideTerminalTotalDifficulty)
 	if _, ok := genesisErr.(*params.ConfigCompatError); genesisErr != nil && !ok {
 		return nil, genesisErr
@@ -170,7 +172,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	log.Info("Initialising Ethereum protocol", "network", config.NetworkId, "dbversion", dbVer)
 
-	if !config.SkipBcVersionCheck {
+	if !config.SkipBcVersionCheck { // 检查数据库里面存储的BlockChainVersion和客户端的BlockChainVersion的版本是否一致
 		if bcVersion != nil && *bcVersion > core.BlockChainVersion {
 			return nil, fmt.Errorf("database version is v%d, Geth %s only supports v%d", *bcVersion, params.VersionWithMeta, core.BlockChainVersion)
 		} else if bcVersion == nil || *bcVersion < core.BlockChainVersion {
@@ -196,6 +198,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			Preimages:           config.Preimages,
 		}
 	)
+	// 使用数据库创建了区块链
 	eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, chainConfig, eth.engine, vmConfig, eth.shouldPreserve, &config.TxLookupLimit)
 	if err != nil {
 		return nil, err
@@ -211,6 +214,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if config.TxPool.Journal != "" {
 		config.TxPool.Journal = stack.ResolvePath(config.TxPool.Journal)
 	}
+	// 创建交易池。 用来存储本地或者在网络上接收到的交易。
 	eth.txPool = core.NewTxPool(config.TxPool, chainConfig, eth.blockchain)
 
 	// Permit the downloader to use the trie cache allowance during fast sync

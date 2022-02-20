@@ -51,8 +51,8 @@ func (eth *Ethereum) startBloomHandlers(sectionSize uint64) {
 				case <-eth.closeBloomHandler:
 					return
 
-				case request := <-eth.bloomRequests:
-					task := <-request
+				case request := <-eth.bloomRequests: // request是一个通道
+					task := <-request //从通道里面获取一个task
 					task.Bitsets = make([][]byte, len(task.Sections))
 					for i, section := range task.Sections {
 						head := rawdb.ReadCanonicalHash(eth.chainDb, (section+1)*sectionSize-1)
@@ -66,7 +66,7 @@ func (eth *Ethereum) startBloomHandlers(sectionSize uint64) {
 							task.Error = err
 						}
 					}
-					request <- task
+					request <- task //通过request通道返回结果
 				}
 			}
 		}()

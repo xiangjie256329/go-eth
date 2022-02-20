@@ -395,6 +395,7 @@ func (f *BlockFetcher) loop() {
 				break
 			}
 			// If we have a valid block number, check that it's potentially useful
+			// 查看是潜在是否有用。 根据这个区块号和本地区块链的距离， 太大和太小对于我们都没有意义。
 			if notification.number > 0 {
 				if dist := int64(notification.number) - int64(f.chainHeight()); dist < -maxUncleDist || dist > maxQueueDist {
 					log.Debug("Peer discarded announcement", "peer", notification.origin, "number", notification.number, "hash", notification.hash, "distance", dist)
@@ -445,8 +446,10 @@ func (f *BlockFetcher) loop() {
 				if f.light {
 					timeout = 0
 				}
+				// 最早收到的announce，并经过arriveTimeout-gatherSlack这么长的时间。
 				if time.Since(announces[0].time) > timeout {
 					// Pick a random peer to retrieve from, reset all others
+					// announces代表了同一个区块的来自多个peer的多个announce
 					announce := announces[rand.Intn(len(announces))]
 					f.forgetHash(hash)
 
@@ -458,6 +461,7 @@ func (f *BlockFetcher) loop() {
 				}
 			}
 			// Send out all block header requests
+			// 发送所有的请求。
 			for peer, hashes := range request {
 				log.Trace("Fetching scheduled headers", "peer", peer, "list", hashes)
 
@@ -524,8 +528,10 @@ func (f *BlockFetcher) loop() {
 				hash := header.Hash()
 
 				// Filter fetcher-requested headers from other synchronisation algorithms
+				// 根据情况看这个是否是我们的请求返回的信息。
 				if announce := f.fetching[hash]; announce != nil && announce.origin == task.peer && f.fetched[hash] == nil && f.completing[hash] == nil && f.queued[hash] == nil {
 					// If the delivered header does not match the promised number, drop the announcer
+					// 如果返回的header的区块高度和我们请求的不同，那么删除掉返回这个header的peer。 并且忘记掉这个hash(以便于重新获取区块信息)
 					if header.Number.Uint64() != announce.number {
 						log.Trace("Invalid block number fetched", "peer", announce.origin, "hash", header.Hash(), "announced", announce.number, "provided", header.Number)
 						f.dropPeer(announce.origin)
@@ -534,6 +540,7 @@ func (f *BlockFetcher) loop() {
 					}
 					// Collect all headers only if we are running in light
 					// mode and the headers are not imported by other means.
+					// 根据区块头查看，如果这个区块不包含任何交易或者是Uncle区块。那么我们就不用获取区块的body了。 那么直接插入完成列表。
 					if f.light {
 						if f.getHeader(hash) == nil {
 							announce.header = header
@@ -559,6 +566,7 @@ func (f *BlockFetcher) loop() {
 							continue
 						}
 						// Otherwise add to the list of blocks needing completion
+						// 否则，插入到未完成列表等待fetch blockbody
 						incomplete = append(incomplete, announce)
 					} else {
 						log.Trace("Block already imported, discarding header", "peer", announce.origin, "number", header.Number, "hash", header.Hash())
@@ -576,6 +584,7 @@ func (f *BlockFetcher) loop() {
 				return
 			}
 			// Schedule the retrieved headers for body completion
+			// 这些只有header的区块放入queue等待import
 			for _, announce := range incomplete {
 				hash := announce.header.Hash()
 				if _, ok := f.completing[hash]; ok {
@@ -719,13 +728,14 @@ func (f *BlockFetcher) enqueue(peer string, header *types.Header, block *types.B
 	}
 	// Ensure the peer isn't DOSing us
 	count := f.queues[peer] + 1
-	if count > blockLimit {
+	if count > blockLimit {//blockLimit 64 如果缓存的对方的block太多。
 		log.Debug("Discarded delivered header or block, exceeded allowance", "peer", peer, "number", number, "hash", hash, "limit", blockLimit)
 		blockBroadcastDOSMeter.Mark(1)
 		f.forgetHash(hash)
 		return
 	}
 	// Discard any past or too distant blocks
+	// 距离我们的区块链太远。
 	if dist := int64(number) - int64(f.chainHeight()); dist < -maxUncleDist || dist > maxQueueDist {
 		log.Debug("Discarded delivered header or block, too far away", "peer", peer, "number", number, "hash", hash, "distance", dist)
 		blockBroadcastDropMeter.Mark(1)
@@ -733,6 +743,7 @@ func (f *BlockFetcher) enqueue(peer string, header *types.Header, block *types.B
 		return
 	}
 	// Schedule the block for future importing
+	// 插入到队列。
 	if _, ok := f.queued[hash]; !ok {
 		op := &blockOrHeaderInject{origin: peer}
 		if header != nil {

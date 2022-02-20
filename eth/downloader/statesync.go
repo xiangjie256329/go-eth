@@ -46,7 +46,7 @@ func (d *Downloader) stateFetcher() {
 	for {
 		select {
 		case s := <-d.stateSyncStart:
-			for next := s; next != nil; {
+			for next := s; next != nil; { // 这个for循环代表了downloader可以通过发送信号来随时改变需要同步的对象。
 				next = d.runStateSync(next)
 			}
 		case <-d.quitCh:
@@ -60,6 +60,7 @@ func (d *Downloader) stateFetcher() {
 func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 	log.Trace("State sync starting", "root", s.root)
 
+	//运行状态同步
 	go s.run()
 	defer s.Cancel()
 

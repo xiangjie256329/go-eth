@@ -36,16 +36,17 @@ import (
 // filter is a helper struct that holds meta information over the filter type
 // and associated subscription in the event system.
 type filter struct {
-	typ      Type
-	deadline *time.Timer // filter is inactiv when deadline triggers
-	hashes   []common.Hash
-	crit     FilterCriteria
-	logs     []*types.Log
-	s        *Subscription // associated subscription in event system
+	typ      Type	// 过滤器的类型， 过滤什么类型的数据
+	deadline *time.Timer // filter is inactiv when deadline triggers 当计时器响起的时候，会触发定时器。
+	hashes   []common.Hash //过滤出来的hash结果
+	crit     FilterCriteria //过滤条件
+	logs     []*types.Log	//过滤出来的Log信息
+	s        *Subscription // associated subscription in event system 事件系统中的订阅器。
 }
 
 // PublicFilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
 // information related to the Ethereum protocol such als blocks, transactions and logs.
+// PublicFilterAPI用来创建和管理过滤器。 允许外部的客户端获取以太坊协议的一些信息，比如区块信息，交易信息和日志信息。
 type PublicFilterAPI struct {
 	backend   Backend
 	mux       *event.TypeMux
@@ -71,6 +72,7 @@ func NewPublicFilterAPI(backend Backend, lightMode bool, timeout time.Duration) 
 
 // timeoutLoop runs at the interval set by 'timeout' and deletes filters
 // that have not been recently used. It is started when the API is created.
+// 每隔5分钟检查一下。 如果过期的过滤器，删除。
 func (api *PublicFilterAPI) timeoutLoop(timeout time.Duration) {
 	var toUninstall []*Subscription
 	ticker := time.NewTicker(timeout)
@@ -99,6 +101,8 @@ func (api *PublicFilterAPI) timeoutLoop(timeout time.Duration) {
 	}
 }
 
+// NewPendingTransactionFilter,用来创建一个PendingTransactionFilter。 这种方式是用来给那种无法创建长连接的通道使用的(比如HTTP),
+// 如果对于可以建立长链接的通道(比如WebSocket)可以使用rpc提供的发送订阅模式来处理，就不用持续的轮询了
 // NewPendingTransactionFilter creates a filter that fetches pending transaction hashes
 // as transactions enter the pending state.
 //
@@ -109,6 +113,7 @@ func (api *PublicFilterAPI) timeoutLoop(timeout time.Duration) {
 func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
 	var (
 		pendingTxs   = make(chan []common.Hash)
+		// 在事件系统订阅这种消息
 		pendingTxSub = api.events.SubscribePendingTxs(pendingTxs)
 	)
 
@@ -119,7 +124,7 @@ func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
 	go func() {
 		for {
 			select {
-			case ph := <-pendingTxs:
+			case ph := <-pendingTxs: // 接收到pendingTxs，存储在过滤器的hashes容器里面。
 				api.filtersMu.Lock()
 				if f, found := api.filters[pendingTxSub.ID]; found {
 					f.hashes = append(f.hashes, ph...)
@@ -410,17 +415,17 @@ func (api *PublicFilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*ty
 
 // GetFilterChanges returns the logs for the filter with the given id since
 // last time it was called. This can be used for polling.
-//
+// GetFilterChanges 用来返回从上次调用到现在的所有的指定id的所有过滤信息。这个可以用来轮询
 // For pending transaction and block filters the result is []common.Hash.
 // (pending)Log filters return []Log.
-//
+// 对于pending transaction和block的过滤器，返回结果类型是[]common.Hash. 对于pending Log 过滤器，返回的是 []Log
 // https://eth.wiki/json-rpc/API#eth_getfilterchanges
 func (api *PublicFilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 	api.filtersMu.Lock()
 	defer api.filtersMu.Unlock()
 
 	if f, found := api.filters[id]; found {
-		if !f.deadline.Stop() {
+		if !f.deadline.Stop() { // 如果定时器已经触发，但是filter还没有移除，那么我们先接收定时器的值，然后重置定时器
 			// timer expired but filter is not yet removed in timeout loop
 			// receive timer value and reset timer
 			<-f.deadline.C

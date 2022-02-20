@@ -31,6 +31,7 @@ import (
 const (
 	// bloomThrottling is the time to wait between processing two consecutive index
 	// sections. It's useful during chain upgrades to prevent disk overload.
+	// bloomThrottling是处理两个连续索引段之间的等待时间。 在区块链升级过程中防止磁盘过载是很有用的
 	bloomThrottling = 100 * time.Millisecond
 )
 
@@ -51,6 +52,7 @@ func NewBloomIndexer(db ethdb.Database, size, confirms uint64) *ChainIndexer {
 		db:   db,
 		size: size,
 	}
+	// 可以看到indexDb和chainDb实际是同一个数据库， 但是indexDb的每个key前面附加了一个BloomBitsIndexPrefix的前缀。
 	table := rawdb.NewTable(db, string(rawdb.BloomBitsIndexPrefix))
 
 	return NewChainIndexer(db, table, backend, size, confirms, bloomThrottling, "bloombits")
