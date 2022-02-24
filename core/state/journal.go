@@ -93,6 +93,7 @@ type (
 		prev         *stateObject
 		prevdestruct bool
 	}
+	// 自杀的更改。自杀应该是删除账号，但是如果没有commit的化，对象还没有从stateDB删除。
 	suicideChange struct {
 		account     *common.Address
 		prev        bool // whether account had already suicided
@@ -124,6 +125,7 @@ type (
 	addLogChange struct {
 		txhash common.Hash
 	}
+	// 这个是增加 VM看到的 SHA3的 原始byte[], 增加SHA3 hash -> byte[] 的对应关系
 	addPreimageChange struct {
 		hash common.Hash
 	}

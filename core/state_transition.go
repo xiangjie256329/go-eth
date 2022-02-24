@@ -35,30 +35,31 @@ var emptyCodeHash = crypto.Keccak256Hash(nil)
 The State Transitioning Model
 
 A state transition is a change made when a transaction is applied to the current world state
+状态转换 是指用当前的world state来执行交易，并改变当前的world state
 The state transitioning model does all the necessary work to work out a valid new state root.
-
-1) Nonce handling
-2) Pre pay gas
-3) Create a new state object if the recipient is \0*32
+状态转换做了所有所需的工作来产生一个新的有效的state root
+1) Nonce handling	Nonce 处理
+2) Pre pay gas		预先支付Gas
+3) Create a new state object if the recipient is \0*32	如果接收人是空，那么创建一个新的state object
 4) Value transfer
 == If contract creation ==
-  4a) Attempt to run transaction data
-  4b) If valid, use result as code for the new state object
+  4a) Attempt to run transaction data	尝试运行输入的数据
+  4b) If valid, use result as code for the new state object	如果有效，那么用运行的结果作为新的state object的code
 == end ==
-5) Run Script section
-6) Derive new state root
+5) Run Script section	运行脚本部分
+6) Derive new state root	导出新的state root
 */
 type StateTransition struct {
-	gp         *GasPool
+	gp         *GasPool	//用来追踪区块内部的Gas的使用情况
 	msg        Message
 	gas        uint64
-	gasPrice   *big.Int
+	gasPrice   *big.Int	// gas的价格
 	gasFeeCap  *big.Int
 	gasTipCap  *big.Int
 	initialGas uint64
-	value      *big.Int
-	data       []byte
-	state      vm.StateDB
+	value      *big.Int	// 转账的值
+	data       []byte	// 输入数据
+	state      vm.StateDB	// StateDB
 	evm        *vm.EVM
 }
 
@@ -172,11 +173,14 @@ func NewStateTransition(evm *vm.EVM, msg Message, gp *GasPool) *StateTransition 
 
 // ApplyMessage computes the new state by applying the given message
 // against the old state within the environment.
-//
+// 通过应用给定的Message 和状态来生成新的状态
 // ApplyMessage returns the bytes returned by any EVM execution (if it took place),
 // the gas used (which includes gas refunds) and an error if it failed. An error always
 // indicates a core error meaning that the message would always fail for that particular
 // state and would never be accepted within a block.
+// ApplyMessage返回由任何EVM执行（如果发生）返回的字节，
+// 使用的Gas（包括Gas退款），如果失败则返回错误。 一个错误总是表示一个核心错误，
+// 意味着这个消息对于这个特定的状态将总是失败，并且永远不会在一个块中被接受。
 func ApplyMessage(evm *vm.EVM, msg Message, gp *GasPool) (*ExecutionResult, error) {
 	return NewStateTransition(evm, msg, gp).TransitionDb()
 }
@@ -201,7 +205,7 @@ func (st *StateTransition) buyGas() error {
 	if have, want := st.state.GetBalance(st.msg.From()), balanceCheck; have.Cmp(want) < 0 {
 		return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, st.msg.From().Hex(), have, want)
 	}
-	if err := st.gp.SubGas(st.msg.Gas()); err != nil {
+	if err := st.gp.SubGas(st.msg.Gas()); err != nil { // 从区块的gaspool里面减去， 因为区块是由GasLimit限制整个区块的Gas使用的。
 		return err
 	}
 	st.gas += st.msg.Gas()
@@ -216,6 +220,7 @@ func (st *StateTransition) preCheck() error {
 	if !st.msg.IsFake() {
 		// Make sure this transaction's nonce is correct.
 		stNonce := st.state.GetNonce(st.msg.From())
+		// 当前本地的nonce 需要和 msg的Nonce一样 不然就是状态不同步了。
 		if msgNonce := st.msg.Nonce(); stNonce < msgNonce {
 			return fmt.Errorf("%w: address %v, tx: %d state: %d", ErrNonceTooHigh,
 				st.msg.From().Hex(), msgNonce, stNonce)
@@ -256,6 +261,7 @@ func (st *StateTransition) preCheck() error {
 			}
 		}
 	}
+	// 从账号里面减去 GasLimit * GasPrice
 	return st.buyGas()
 }
 
@@ -295,6 +301,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	contractCreation := msg.To() == nil
 
 	// Check clauses 4-5, subtract intrinsic gas if everything is correct
+	// 计算最开始的Gas  g0
 	gas, err := IntrinsicGas(st.data, st.msg.AccessList(), contractCreation, homestead, istanbul)
 	if err != nil {
 		return nil, err
@@ -317,14 +324,16 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		ret   []byte
 		vmerr error // vm errors do not effect consensus and are therefore not assigned to err
 	)
-	if contractCreation {
+	if contractCreation { //如果是合约创建， 那么调用evm的Create方法
 		ret, _, st.gas, vmerr = st.evm.Create(sender, st.data, st.gas, st.value)
 	} else {
 		// Increment the nonce for the next transaction
+		// 如果是方法调用。那么首先设置sender的nonce。
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
 		ret, st.gas, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value)
 	}
 
+	//计算Gas的退费 会增加到 st.gas上面。 所以矿工拿到的是退税后的
 	if !london {
 		// Before EIP-3529: refunds were capped to gasUsed / 2
 		st.refundGas(params.RefundQuotient)
@@ -336,8 +345,11 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	if london {
 		effectiveTip = cmath.BigMin(st.gasTipCap, new(big.Int).Sub(st.gasFeeCap, st.evm.Context.BaseFee))
 	}
+	// 给矿工增加收入。
 	st.state.AddBalance(st.evm.Context.Coinbase, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip))
 
+	// requiredGas和gasUsed的区别一个是没有退税的， 一个是退税了的。
+	// 看上面的调用 ApplyMessage直接丢弃了requiredGas, 说明返回的是退税了的。
 	return &ExecutionResult{
 		UsedGas:    st.gasUsed(),
 		Err:        vmerr,
@@ -345,6 +357,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	}, nil
 }
 
+//退税，退税是为了奖励大家运行一些能够减轻区块链负担的指令， 比如清空账户的storage. 或者是运行suicide命令来清空账号
 func (st *StateTransition) refundGas(refundQuotient uint64) {
 	// Apply refund counter, capped to a refund quotient
 	refund := st.gasUsed() / refundQuotient
@@ -355,10 +368,12 @@ func (st *StateTransition) refundGas(refundQuotient uint64) {
 
 	// Return ETH for remaining gas, exchanged at the original rate.
 	remaining := new(big.Int).Mul(new(big.Int).SetUint64(st.gas), st.gasPrice)
+	// 首先把用户还剩下的Gas还回去。
 	st.state.AddBalance(st.msg.From(), remaining)
 
 	// Also return remaining gas to the block gas counter so it is
 	// available for the next transaction.
+	// 同时也把退税的钱还给gaspool给下个交易腾点Gas空间。
 	st.gp.AddGas(st.gas)
 }
 

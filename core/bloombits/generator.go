@@ -57,15 +57,15 @@ func NewGenerator(sections uint) (*Generator, error) {
 // in memory accordingly.
 func (b *Generator) AddBloom(index uint, bloom types.Bloom) error {
 	// Make sure we're not adding more bloom filters than our capacity
-	if b.nextSec >= b.sections {
+	if b.nextSec >= b.sections { //超过了section的最大数量
 		return errSectionOutOfBounds
 	}
 	if b.nextSec != index {
 		return errors.New("bloom filter with unexpected index")
 	}
 	// Rotate the bloom and insert into our collection
-	byteIndex := b.nextSec / 8
-	bitIndex := byte(7 - b.nextSec%8)
+	byteIndex := b.nextSec / 8	// 查找到对应的byte，需要设置这个byte位置
+	bitIndex := byte(7 - b.nextSec%8)	// 找到需要设置值的bit在byte的下标
 	for byt := 0; byt < types.BloomByteLength; byt++ {
 		bloomByte := bloom[types.BloomByteLength-1-byt]
 		if bloomByte == 0 {
@@ -87,6 +87,7 @@ func (b *Generator) AddBloom(index uint, bloom types.Bloom) error {
 
 // Bitset returns the bit vector belonging to the given bit index after all
 // blooms have been added.
+// 在所有的Blooms被添加之后，Bitset返回属于给定位索引的数据。
 func (b *Generator) Bitset(idx uint) ([]byte, error) {
 	if b.nextSec != b.sections {
 		return nil, errors.New("bloom not fully generated yet")

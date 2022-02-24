@@ -32,6 +32,7 @@ var stackPool = sync.Pool{
 // Stack is an object for basic stack operations. Items popped to the stack are
 // expected to be changed and modified. stack does not take care of adding newly
 // initialised objects.
+// 用1024个big.Int的定长数组来作为堆栈的存储
 type Stack struct {
 	data []uint256.Int
 }

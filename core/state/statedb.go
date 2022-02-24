@@ -62,7 +62,7 @@ func (n *proofList) Delete(key []byte) error {
 // * Contracts
 // * Accounts
 type StateDB struct {
-	db           Database
+	db           Database	// 后端的数据库
 	prefetcher   *triePrefetcher
 	originalRoot common.Hash // The pre-state root, before any changes were made
 	trie         Trie
@@ -75,6 +75,9 @@ type StateDB struct {
 	snapStorage   map[common.Hash]map[common.Hash][]byte
 
 	// This map holds 'live' objects, which will get modified while processing a state transition.
+	// 下面的Map用来存储当前活动的对象，这些对象在状态转换的时候会被修改。
+	// stateObjects 用来缓存对象
+	// stateObjectsDirty用来缓存被修改过的对象。
 	stateObjects        map[common.Address]*stateObject
 	stateObjectsPending map[common.Address]struct{} // State objects finalized but not yet written to the trie
 	stateObjectsDirty   map[common.Address]struct{} // State objects modified in the current execution
@@ -89,18 +92,19 @@ type StateDB struct {
 	// The refund counter, also used by state transitioning.
 	refund uint64
 
-	thash   common.Hash
-	txIndex int
-	logs    map[common.Hash][]*types.Log
+	thash   common.Hash	//当前的transaction hash
+	txIndex int		// 当前的交易的index
+	logs    map[common.Hash][]*types.Log	// 日志 key是交易的hash值
 	logSize uint
 
-	preimages map[common.Hash][]byte
+	preimages map[common.Hash][]byte	// EVM计算的 SHA3->byte[]的映射关系
 
 	// Per-transaction access list
 	accessList *accessList
 
 	// Journal of state modifications. This is the backbone of
 	// Snapshot and RevertToSnapshot.
+	// 状态修改日志。 这是Snapshot和RevertToSnapshot的支柱。
 	journal        *journal
 	validRevisions []revision
 	nextRevisionId int
@@ -743,6 +747,8 @@ func (s *StateDB) Copy() *StateDB {
 }
 
 // Snapshot returns an identifier for the current revision of the state.
+// Snapshot可以创建一个快照， 然后通过 RevertToSnapshot可以回滚到哪个状态，这个功能是通过journal来做到的。
+// 每一步的修改都会往journal里面添加一个undo日志。 如果需要回滚只需要执行undo日志就行了
 func (s *StateDB) Snapshot() int {
 	id := s.nextRevisionId
 	s.nextRevisionId++

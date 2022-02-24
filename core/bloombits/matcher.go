@@ -49,6 +49,8 @@ func calcBloomIndexes(b []byte) bloomIndexes {
 // matchers have already found potential matches. Subsequent sub-matchers will
 // binary AND their matches with this vector. If vector is nil, it represents a
 // section to be processed by the first sub-matcher.
+// partialMatches代表了部分匹配的结果。 比入有三个需要过滤的条件 addr1, addr2, addr3 ，需要找到同时匹配这三个条件的数据。 那么我们启动包含了匹配这三个条件的流水线。
+// 第一个匹配的结果会送给第二个，第二个把第一个的结果和自己的结果执行bit与操作，然后作为匹配的结果送给第三个处理。
 type partialMatches struct {
 	section uint64
 	bitset  []byte
@@ -60,6 +62,8 @@ type partialMatches struct {
 //
 // The contest and error fields are used by the light client to terminate matching
 // early if an error is encountered on some path of the pipeline.
+// Retrieval 代表了 一次区块布隆过滤器索引的检索工作， 这个对象被发送给 eth/bloombits.go 里面的 startBloomHandlers来处理，
+// 这个方法从数据库来加载布隆过滤器索引然后放在Bitsets里面返回。
 type Retrieval struct {
 	Bit      uint
 	Sections []uint64
@@ -78,10 +82,10 @@ type Matcher struct {
 	filters    [][]bloomIndexes    // Filter the system is matching for
 	schedulers map[uint]*scheduler // Retrieval schedulers for loading bloom bits
 
-	retrievers chan chan uint       // Retriever processes waiting for bit allocations
-	counters   chan chan uint       // Retriever processes waiting for task count reports
-	retrievals chan chan *Retrieval // Retriever processes waiting for task allocations
-	deliveries chan *Retrieval      // Retriever processes waiting for task response deliveries
+	retrievers chan chan uint       // Retriever processes waiting for bit allocations	用来传递 检索任务的通道
+	counters   chan chan uint       // Retriever processes waiting for task count reports	用来返回当前所有的任务数量
+	retrievals chan chan *Retrieval // Retriever processes waiting for task allocations	用来传递 检索任务的分配
+	deliveries chan *Retrieval      // Retriever processes waiting for task response deliveries	检索完成的结果传递到这个通道
 
 	running uint32 // Atomic flag whether a session is live or not
 }
@@ -113,10 +117,14 @@ func NewMatcher(sectionSize uint64, filters [][][]byte) *Matcher {
 				bloomBits = nil
 				break
 			}
+			// clause 对应了输入的第三维度的数据，可能是一个address或者是一个topic
+			// calcBloomIndexes计算了这个数据对应的(0-2048)的布隆过滤器中的三个下标， 就是说如果在布隆过滤器中对应的三位都为1，那么clause这个数据就有可能在这里。
 			bloomBits[i] = calcBloomIndexes(clause)
 		}
 		// Accumulate the filter rules if no nil rule was within
+		// 在计算中 如果bloomBits中只要其中的一条能够找到。那么就认为整个成立。
 		if bloomBits != nil {
+			// 不同的bloomBits 需要同时成立，整个结果才能成立。
 			m.filters = append(m.filters, bloomBits)
 		}
 	}
@@ -124,6 +132,8 @@ func NewMatcher(sectionSize uint64, filters [][][]byte) *Matcher {
 	for _, bloomIndexLists := range m.filters {
 		for _, bloomIndexList := range bloomIndexLists {
 			for _, bloomIndex := range bloomIndexList {
+				// 对于所有可能出现的下标。 我们都生成一个scheduler来进行对应位置的
+				// 布隆过滤数据的检索。
 				m.addScheduler(bloomIndex)
 			}
 		}
@@ -152,6 +162,7 @@ func (m *Matcher) Start(ctx context.Context, begin, end uint64, results chan uin
 	defer atomic.StoreUint32(&m.running, 0)
 
 	// Initiate a new matching round
+	// 启动了一个session，作为返回值，管理查找的生命周期。
 	session := &MatcherSession{
 		matcher: m,
 		quit:    make(chan struct{}),
@@ -160,6 +171,7 @@ func (m *Matcher) Start(ctx context.Context, begin, end uint64, results chan uin
 	for _, scheduler := range m.schedulers {
 		scheduler.reset()
 	}
+	// 这个运行会建立起流程，返回了一个partialMatches类型的管道表示查询的部分结果。
 	sink := m.run(begin, end, cap(results), session)
 
 	// Read the output from the result sink and deliver to the user
@@ -175,6 +187,8 @@ func (m *Matcher) Start(ctx context.Context, begin, end uint64, results chan uin
 
 			case res, ok := <-sink:
 				// New match result found
+				// 找到返回结果 因为返回值是 section和 section中哪些区块可能有值的bitmap
+				// 所以需要遍历这个bitmap，找到那些被置位的区块，把区块号返回回去。
 				if !ok {
 					return
 				}
@@ -218,9 +232,10 @@ func (m *Matcher) Start(ctx context.Context, begin, end uint64, results chan uin
 // for each topic set, each sub-matcher receiving a section only if the previous
 // ones have all found a potential match in one of the blocks of the section,
 // then binary AND-ing its own matches and forwarding the result to the next one.
-//
+//	创建一个子匹配器的流水线，一个用于地址集，一个用于每个主题集，每个子匹配器只有在先前的所有子块都在该部分的一个块中找到可能的匹配时才接收一个部分，然后把接收到的和自己的匹配，并将结果转交给下一个。
 // The method starts feeding the section indexes into the first sub-matcher on a
 // new goroutine and returns a sink channel receiving the results.
+// 该方法开始section indexer送到第一个子匹配器，并返回接收结果的接收器通道。
 func (m *Matcher) run(begin, end uint64, buffer int, session *MatcherSession) chan *partialMatches {
 	// Create the source channel and feed section indexes into
 	source := make(chan *partialMatches, buffer)
@@ -231,6 +246,8 @@ func (m *Matcher) run(begin, end uint64, buffer int, session *MatcherSession) ch
 		defer close(source)
 
 		for i := begin / m.sectionSize; i <= end/m.sectionSize; i++ {
+			// 这个for循环 构造了subMatch的第一个输入源，剩下的subMatch把上一个的结果作为自己的源
+			// 这个源的bitset字段都是0xff，代表完全的匹配，它将和我们这一步的匹配进行与操作，得到这一步匹配的结果。
 			select {
 			case <-session.quit:
 				return
@@ -242,11 +259,12 @@ func (m *Matcher) run(begin, end uint64, buffer int, session *MatcherSession) ch
 	next := source
 	dist := make(chan *request, buffer)
 
-	for _, bloom := range m.filters {
+	for _, bloom := range m.filters {	//构建流水线， 前一个的输出作为下一个subMatch的输入。
 		next = m.subMatch(next, dist, bloom, session)
 	}
 	// Start the request distribution
 	session.pend.Add(1)
+	// 启动distributor线程。
 	go m.distributor(dist, session)
 
 	return next
@@ -256,21 +274,28 @@ func (m *Matcher) run(begin, end uint64, buffer int, session *MatcherSession) ch
 // binary AND-s the result to the daisy-chain input (source) and forwards it to the daisy-chain output.
 // The matches of each address/topic are calculated by fetching the given sections of the three bloom bit indexes belonging to
 // that address/topic, and binary AND-ing those vectors together.
+// subMatch创建一个子匹配器，用于过滤一组地址或主题，对这些主题进行bit位或操作，然后将上一个结果与当前过滤结果进行位与操作，如果结果不全位空，就把结果传递给下一个子匹配器。
+// 每个地址/题目的匹配是通过获取属于该地址/题目的三个布隆过滤器位索引的给定部分以及将这些向量二进制AND并在一起来计算的。
+// subMatch是最重要的一个函数， 把filters [][][3]的 第一维度的与，第二维度的或， 第三维度的与操作 结合在一起。
 func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloom []bloomIndexes, session *MatcherSession) chan *partialMatches {
 	// Start the concurrent schedulers for each bit required by the bloom filter
+	// 传入的bloom []bloomIndexes参数是filters的第二,第三维度  [][3]
 	sectionSources := make([][3]chan uint64, len(bloom))
 	sectionSinks := make([][3]chan []byte, len(bloom))
-	for i, bits := range bloom {
-		for j, bit := range bits {
-			sectionSources[i][j] = make(chan uint64, cap(source))
-			sectionSinks[i][j] = make(chan []byte, cap(source))
+	for i, bits := range bloom {	// i代表了第二维度的数量
+		for j, bit := range bits {	//j 代表了布隆过滤器的下标 肯定只有三个 取值(0-2048)
+			sectionSources[i][j] = make(chan uint64, cap(source))	// 创建scheduler的输入channel
+			sectionSinks[i][j] = make(chan []byte, cap(source))	// 创建 scheduler的输出channel
 
+			// 对这个bit发起调度请求， 通过sectionSources[i][j]传递需要查询的section
+			// 通过sectionSinks[i][j]来接收结果
+			// dist 是scheduler传递请求的通道。 这个在scheduler的介绍里面有。
 			m.schedulers[bit].run(sectionSources[i][j], dist, sectionSinks[i][j], session.quit, &session.pend)
 		}
 	}
 
 	process := make(chan *partialMatches, cap(source)) // entries from source are forwarded here after fetches have been initiated
-	results := make(chan *partialMatches, cap(source))
+	results := make(chan *partialMatches, cap(source))	// 返回值channel
 
 	session.pend.Add(2)
 	go func() {
@@ -286,6 +311,7 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 			}
 		}()
 		// Read sections from the source channel and multiplex into all bit-schedulers
+		// 从source channel读取sections 并把这些数据通过sectionSources传递给scheduler
 		for {
 			select {
 			case <-session.quit:
@@ -299,6 +325,8 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 				// Multiplex the section index to all bit-schedulers
 				for _, bloomSources := range sectionSources {
 					for _, bitSource := range bloomSources {
+						// 传递给上面的所有的scheduler的输入通道。 申请对这些
+						// section 的指定bit进行查找。 结果会发送给sectionSinks[i][j]
 						select {
 						case <-session.quit:
 							return
@@ -310,7 +338,7 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 				select {
 				case <-session.quit:
 					return
-				case process <- subres:
+				case process <- subres:	//等到所有的请求都递交给scheduler 给process发送消息。
 				}
 			}
 		}
@@ -329,6 +357,8 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 
 			case subres, ok := <-process:
 				// Notified of a section being retrieved
+				// 这里有个问题。 有没有可能乱序。 因为通道都是有缓存的。 可能查询得快慢导致
+				// 查看了scheduler的实现， scheduler是保证顺序的。怎么进来，就会怎么出去。
 				if !ok {
 					return
 				}
@@ -336,7 +366,7 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 				var orVector []byte
 				for _, bloomSinks := range sectionSinks {
 					var andVector []byte
-					for _, bitSink := range bloomSinks {
+					for _, bitSink := range bloomSinks { // 这里可以接收到三个值 每个代表了对应下标的 布隆过滤器的值,对这三个值进行与操作，就可以得到那些区块可能存在对应的值。
 						var data []byte
 						select {
 						case <-session.quit:
@@ -350,20 +380,21 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 							bitutil.ANDBytes(andVector, andVector, data)
 						}
 					}
-					if orVector == nil {
+					if orVector == nil { //对第一维度的数据执行 Or操作。
 						orVector = andVector
 					} else {
 						bitutil.ORBytes(orVector, orVector, andVector)
 					}
 				}
 
-				if orVector == nil {
+				if orVector == nil {	//可能通道被关闭了。 没有查询到任何值
 					orVector = make([]byte, int(m.sectionSize/8))
 				}
 				if subres.bitset != nil {
+					// 和输入的上一次的结果进行与操作。 记得最开始这个值被初始化为全1
 					bitutil.ANDBytes(orVector, orVector, subres.bitset)
 				}
-				if bitutil.TestBytes(orVector) {
+				if bitutil.TestBytes(orVector) {	// 如果不全为0 那么添加到结果。可能会给下一个匹配。或者是返回。
 					select {
 					case <-session.quit:
 						return
@@ -413,19 +444,21 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 				return
 			}
 
-		case req := <-dist:
+		case req := <-dist: // scheduler发送来的请求 添加到指定bit位置的queue里面
 			// New retrieval request arrived to be distributed to some fetcher process
 			queue := requests[req.bit]
 			index := sort.Search(len(queue), func(i int) bool { return queue[i] >= req.section })
 			requests[req.bit] = append(queue[:index], append([]uint64{req.section}, queue[index:]...)...)
 
 			// If it's a new bit and we have waiting fetchers, allocate to them
+			// 如果这个bit是一个新的。 还没有被指派，那么我们把他指派给等待的fetchers
 			if len(queue) == 0 {
 				assign(req.bit)
 			}
 
 		case fetcher := <-retrievers:
 			// New retriever arrived, find the lowest section-ed bit to assign
+			// 如果新的retrievers进来了， 那么我们查看是否有任务没有指派
 			bit, best := uint(0), uint64(math.MaxUint64)
 			for idx := range unallocs {
 				if requests[idx][0] < best {
@@ -434,7 +467,7 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 			}
 			// Stop tracking this bit (and alloc notifications if no more work is available)
 			delete(unallocs, bit)
-			if len(unallocs) == 0 {
+			if len(unallocs) == 0 { //如果所有任务都被指派。那么停止关注retrievers
 				retrievers = nil
 			}
 			allocs++
@@ -442,10 +475,12 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 
 		case fetcher := <-m.counters:
 			// New task count request arrives, return number of items
+			// 来了新的请求，访问request的指定bit的数量。
 			fetcher <- uint(len(requests[<-fetcher]))
 
 		case fetcher := <-m.retrievals:
 			// New fetcher waiting for tasks to retrieve, assign
+			// 有人来领取任务。
 			task := <-fetcher
 			if want := len(task.Sections); want >= len(requests[task.Bit]) {
 				task.Sections = requests[task.Bit]
@@ -457,6 +492,7 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 			fetcher <- task
 
 			// If anything was left unallocated, try to assign to someone else
+			// 如果还有任务没有分派完。 尝试分配给其他人。
 			if len(requests[task.Bit]) > 0 {
 				assign(task.Bit)
 			}
@@ -464,24 +500,26 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 		case result := <-m.deliveries:
 			// New retrieval task response from fetcher, split out missing sections and
 			// deliver complete ones
+			// 收到了任务的结果。
 			var (
 				sections = make([]uint64, 0, len(result.Sections))
 				bitsets  = make([][]byte, 0, len(result.Bitsets))
 				missing  = make([]uint64, 0, len(result.Sections))
 			)
 			for i, bitset := range result.Bitsets {
-				if len(bitset) == 0 {
+				if len(bitset) == 0 {	//如果任务结果有缺失，记录下来
 					missing = append(missing, result.Sections[i])
 					continue
 				}
 				sections = append(sections, result.Sections[i])
 				bitsets = append(bitsets, bitset)
 			}
+			// 投递结果
 			m.schedulers[result.Bit].deliver(sections, bitsets)
 			allocs--
 
 			// Reschedule missing sections and allocate bit if newly available
-			if len(missing) > 0 {
+			if len(missing) > 0 {	//如果有缺失， 那么重新生成新的任务。
 				queue := requests[result.Bit]
 				for _, section := range missing {
 					index := sort.Search(len(queue), func(i int) bool { return queue[i] >= section })
@@ -595,6 +633,7 @@ func (s *MatcherSession) deliverSections(bit uint, sections []uint64, bitsets []
 // This method will block for the lifetime of the session. Even after termination
 // of the session, any request in-flight need to be responded to! Empty responses
 // are fine though in that case.
+// 任务的执行Multiplex,Multiplex函数不断的领取任务，把任务投递给bloomRequest队列。从队列获取结果。然后投递给distributor。 完成了整个过程。
 func (s *MatcherSession) Multiplex(batch int, wait time.Duration, mux chan chan *Retrieval) {
 	for {
 		// Allocate a new bloom bit index to retrieve data for, stopping when done

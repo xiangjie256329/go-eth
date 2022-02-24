@@ -58,37 +58,47 @@ func (s Storage) Copy() Storage {
 }
 
 // stateObject represents an Ethereum account which is being modified.
-//
+// stateObject表示正在修改的以太坊帐户
 // The usage pattern is as follows:
 // First you need to obtain a state object.
 // Account values can be accessed and modified through the object.
 // Finally, call CommitTrie to write the modified storage trie into a database.
+
+//使用模式如下：
+//首先你需要获得一个state_object。
+//帐户值可以通过对象访问和修改。
+//最后，调用CommitTrie将修改后的存储trie写入数据库。
 type stateObject struct {
 	address  common.Address
-	addrHash common.Hash // hash of ethereum address of the account
-	data     types.StateAccount
-	db       *StateDB
+	addrHash common.Hash // hash of ethereum address of the account	以太坊账号地址的hash值
+	data     types.StateAccount	// 这个是实际的以太坊账号的信息
+	db       *StateDB	//状态数据库
 
 	// DB error.
 	// State objects are used by the consensus core and VM which are
 	// unable to deal with database-level errors. Any error that occurs
 	// during a database read is memoized here and will eventually be returned
 	// by StateDB.Commit.
+
+	//数据库错误。
+	//stateObject会被共识算法的核心和VM使用，在这些代码内部无法处理数据库级别的错误。
+	//在数据库读取期间发生的任何错误都会在这里被存储，最终将由StateDB.Commit返回。
 	dbErr error
 
 	// Write caches.
-	trie Trie // storage trie, which becomes non-nil on first access
-	code Code // contract bytecode, which gets set when code is loaded
+	trie Trie // storage trie, which becomes non-nil on first access	用户的存储trie ，在第一次访问的时候变得非空
+	code Code // contract bytecode, which gets set when code is loaded	合约代码，当代码被加载的时候被设置
 
 	originStorage  Storage // Storage cache of original entries to dedup rewrites, reset for every transaction
 	pendingStorage Storage // Storage entries that need to be flushed to disk, at the end of an entire block
-	dirtyStorage   Storage // Storage entries that have been modified in the current transaction execution
+	dirtyStorage   Storage // Storage entries that have been modified in the current transaction execution	需要刷入磁盘的用户存储对象
 	fakeStorage    Storage // Fake storage which constructed by caller for debugging purpose.
 
 	// Cache flags.
 	// When an object is marked suicided it will be delete from the trie
 	// during the "update" phase of the state transition.
-	dirtyCode bool // true if the code was updated
+	// 当一个对象被标记为自杀时，它将在状态转换的“更新”阶段期间从树中删除。
+	dirtyCode bool // true if the code was updated	如果代码被更新，会设置为true
 	suicided  bool
 	deleted   bool
 }
@@ -147,6 +157,7 @@ func (s *stateObject) touch() {
 	}
 }
 
+// getTrie返回账户的Storage Trie
 func (s *stateObject) getTrie(db Database) Trie {
 	if s.trie == nil {
 		// Try fetching from prefetcher first
@@ -169,6 +180,8 @@ func (s *stateObject) getTrie(db Database) Trie {
 }
 
 // GetState retrieves a value from the account storage trie.
+// 返回account storage 的一个值，这个值的类型是Hash类型。
+// 如果缓存里面存在就从缓存里查找，否则从数据库里面查询。然后存储到缓存里面。
 func (s *stateObject) GetState(db Database, key common.Hash) common.Hash {
 	// If the fake storage is set, only lookup the state here(in the debugging mode)
 	if s.fakeStorage != nil {
@@ -257,6 +270,7 @@ func (s *stateObject) GetCommittedState(db Database, key common.Hash) common.Has
 }
 
 // SetState updates a value in account storage.
+// 往 account storeage 里面设置一个值 key value 的类型都是Hash类型。
 func (s *stateObject) SetState(db Database, key, value common.Hash) {
 	// If the fake storage is set, put the temporary state update here.
 	if s.fakeStorage != nil {
@@ -376,6 +390,7 @@ func (s *stateObject) updateTrie(db Database) Trie {
 }
 
 // UpdateRoot sets the trie root to the current root hash of
+// 把账号的root设置为当前的trie树的根
 func (s *stateObject) updateRoot(db Database) {
 	// If nothing changed, don't bother with hashing anything
 	if s.updateTrie(db) == nil {
@@ -390,8 +405,10 @@ func (s *stateObject) updateRoot(db Database) {
 
 // CommitTrie the storage trie of the object to db.
 // This updates the trie root.
+// 步骤，首先打开，然后修改，然后提交或者回滚
 func (s *stateObject) CommitTrie(db Database) (int, error) {
 	// If nothing changed, don't bother with hashing anything
+	// updateTrie把修改过的缓存写入Trie树
 	if s.updateTrie(db) == nil {
 		return 0, nil
 	}

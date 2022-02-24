@@ -53,6 +53,7 @@ type ChainIndexerBackend interface {
 	Commit() error
 
 	// Prune deletes the chain index older than the given threshold.
+	// Prune 删除早于给定阈值的链索引。用于裁剪
 	Prune(threshold uint64) error
 }
 

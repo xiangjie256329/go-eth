@@ -61,7 +61,7 @@ type EVMInterpreter struct {
 	hasherBuf common.Hash // Keccak256 hasher result array shared aross opcodes
 
 	readOnly   bool   // Whether to throw on stateful modifications
-	returnData []byte // Last CALL's return data for subsequent reuse
+	returnData []byte // Last CALL's return data for subsequent reuse	最后一个函数的返回值
 }
 
 // NewEVMInterpreter returns a new instance of the Interpreter.
@@ -109,10 +109,11 @@ func NewEVMInterpreter(evm *EVM, cfg Config) *EVMInterpreter {
 
 // Run loops and evaluates the contract's code with the given input data and returns
 // the return byte-slice and an error if one occurred.
-//
+// 用给定的入参循环执行合约的代码，并返回返回的字节片段，如果发生错误则返回错误。
 // It's important to note that any errors returned by the interpreter should be
 // considered a revert-and-consume-all-gas operation except for
 // ErrExecutionReverted which means revert-and-keep-gas-left.
+// 重要的是要注意，解释器返回的任何错误都会消耗全部gas。 为了减少复杂性,没有特别的错误处理流程。
 func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (ret []byte, err error) {
 
 	// Increment the call depth which is restricted to 1024

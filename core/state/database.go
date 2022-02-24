@@ -40,18 +40,23 @@ const (
 // Database wraps access to tries and contract code.
 type Database interface {
 	// OpenTrie opens the main account trie.
+	// OpenTrie 打开了主账号的trie树
 	OpenTrie(root common.Hash) (Trie, error)
 
 	// OpenStorageTrie opens the storage trie of an account.
+	// OpenStorageTrie 打开了一个账号的storage trie
 	OpenStorageTrie(addrHash, root common.Hash) (Trie, error)
 
 	// CopyTrie returns an independent copy of the given trie.
+	// CopyTrie 返回了一个指定trie的独立的copy
 	CopyTrie(Trie) Trie
 
 	// ContractCode retrieves a particular contract's code.
+	// 访问合约代码
 	ContractCode(addrHash, codeHash common.Hash) ([]byte, error)
 
 	// ContractCodeSize retrieves a particular contracts code's size.
+	// 访问合约的大小。 这个方法可能经常被调用。因为有缓存。
 	ContractCodeSize(addrHash, codeHash common.Hash) (int, error)
 
 	// TrieDB retrieves the low level trie database used for data storage.
@@ -127,7 +132,7 @@ func NewDatabaseWithConfig(db ethdb.Database, config *trie.Config) Database {
 
 type cachingDB struct {
 	db            *trie.Database
-	codeSizeCache *lru.Cache
+	codeSizeCache *lru.Cache	//合约代码大小的缓存
 	codeCache     *fastcache.Cache
 }
 

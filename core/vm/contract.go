@@ -42,10 +42,12 @@ func (ar AccountRef) Address() common.Address { return (common.Address)(ar) }
 
 // Contract represents an ethereum contract in the state database. It contains
 // the contract code, calling arguments. Contract implements ContractRef
+// 代表了以太坊 state database里面的一个合约。包含了合约代码，调用参数
 type Contract struct {
 	// CallerAddress is the result of the caller which initialised this
 	// contract. However when the "call method" is delegated this value
 	// needs to be initialised to that of the caller's caller.
+	// CallerAddress是初始化这个合约的人。 如果是delegate，这个值被设置为调用者的调用者。
 	CallerAddress common.Address
 	caller        ContractRef
 	self          ContractRef

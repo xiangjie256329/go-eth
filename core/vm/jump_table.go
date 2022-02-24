@@ -30,7 +30,7 @@ type (
 )
 
 type operation struct {
-	// execute is the operation function
+	// execute is the operation function	执行函数
 	execute     executionFunc
 	constantGas uint64
 	dynamicGas  gasFunc
