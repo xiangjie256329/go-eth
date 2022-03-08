@@ -52,15 +52,15 @@ type Contract struct {
 	caller        ContractRef
 	self          ContractRef
 
-	jumpdests map[common.Hash]bitvec // Aggregated result of JUMPDEST analysis.
+	jumpdests map[common.Hash]bitvec // Aggregated result of JUMPDEST analysis. JUMPDEST指令的分析
 	analysis  bitvec                 // Locally cached result of JUMPDEST analysis
 
-	Code     []byte
-	CodeHash common.Hash
-	CodeAddr *common.Address
-	Input    []byte
+	Code     []byte		//代码
+	CodeHash common.Hash	//代码的HASH
+	CodeAddr *common.Address	//代码地址
+	Input    []byte		// 入参
 
-	Gas   uint64
+	Gas   uint64	// 合约还有多少Gas
 	value *big.Int
 }
 
@@ -70,6 +70,7 @@ func NewContract(caller ContractRef, object ContractRef, value *big.Int, gas uin
 
 	if parent, ok := caller.(*Contract); ok {
 		// Reuse JUMPDEST analysis from parent context if available.
+		// 如果 caller 是一个合约，说明是合约调用了我们。 jumpdests设置为caller的jumpdests
 		c.jumpdests = parent.jumpdests
 	} else {
 		c.jumpdests = make(map[common.Hash]bitvec)
@@ -133,6 +134,7 @@ func (c *Contract) isCode(udest uint64) bool {
 
 // AsDelegate sets the contract to be a delegate call and returns the current
 // contract (for chaining calls)
+// AsDelegate将合约设置为委托调用并返回当前合同（用于链式调用）
 func (c *Contract) AsDelegate() *Contract {
 	// NOTE: caller must, at all times be a contract. It should never happen
 	// that caller is something other than a Contract.
@@ -144,6 +146,7 @@ func (c *Contract) AsDelegate() *Contract {
 }
 
 // GetOp returns the n'th element in the contract's byte array
+// GetOp 用来获取下一跳指令
 func (c *Contract) GetOp(n uint64) OpCode {
 	if n < uint64(len(c.Code)) {
 		return OpCode(c.Code[n])

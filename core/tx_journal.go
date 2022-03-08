@@ -42,6 +42,7 @@ func (*devNull) Close() error                      { return nil }
 
 // txJournal is a rotating log of transactions with the aim of storing locally
 // created transactions to allow non-executed ones to survive node restarts.
+// txJournal是交易的一个循环日志，其目的是存储本地创建的事务，以允许未执行的事务在节点重新启动后继续运行。 结构
 type txJournal struct {
 	path   string         // Filesystem path to store the transactions at
 	writer io.WriteCloser // Output stream to write new transactions into
@@ -56,6 +57,7 @@ func newTxJournal(path string) *txJournal {
 
 // load parses a transaction journal dump from disk, loading its contents into
 // the specified pool.
+// 从磁盘解析交易,然后调用add回调方法.
 func (journal *txJournal) load(add func([]*types.Transaction) []error) error {
 	// Skip the parsing if the journal file doesn't exist at all
 	if _, err := os.Stat(journal.path); os.IsNotExist(err) {
@@ -117,6 +119,7 @@ func (journal *txJournal) load(add func([]*types.Transaction) []error) error {
 }
 
 // insert adds the specified transaction to the local disk journal.
+// insert方法,调用rlp.Encode写入writer
 func (journal *txJournal) insert(tx *types.Transaction) error {
 	if journal.writer == nil {
 		return errNoActiveJournal
@@ -129,6 +132,7 @@ func (journal *txJournal) insert(tx *types.Transaction) error {
 
 // rotate regenerates the transaction journal based on the current contents of
 // the transaction pool.
+// rotate方法基于当前的交易池重新生成交易,
 func (journal *txJournal) rotate(all map[common.Address]types.Transactions) error {
 	// Close the current journal (if any is open)
 	if journal.writer != nil {
